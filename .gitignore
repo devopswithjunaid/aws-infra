@@ -1,0 +1,15 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Your real variable values (owner/repo/region are not secrets, but keep local
+# copies out of git; commit terraform.tfvars.example instead).
+terraform.tfvars
+
+# Plan output artifacts
+tfplan
+*.tfplan

@@ -1,0 +1,179 @@
+# .github/workflows/terraform.yml
+# ===============================
+# Provisions all AWS resources through GitHub Actions instead of your laptop.
+#
+# Flow:
+#   * Any push/PR to main  -> runs fmt check, init, validate, and PLAN.
+#   * Only after you manually APPROVE (the "production" environment gate) does
+#     the APPLY job run and actually create/change AWS resources.
+#
+# AUTH: this admin pipeline uses AWS ACCESS KEYS stored as GitHub secrets. That
+# is intentional and different from the app pipeline: this pipeline has to
+# CREATE the OIDC provider itself, so it cannot yet use OIDC (chicken-and-egg).
+# The app deploy pipeline (in the sample-app repo) is fully keyless.
+#
+# REQUIRED repo configuration (Settings -> Secrets and variables -> Actions):
+#   Secrets:   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   Variables: AWS_REGION       (e.g. us-east-1)
+#              GH_OWNER         (your GitHub username/org, e.g. devopswithjunaid)
+#              APP_REPO_NAME    (the app repo name, e.g. sample-app)
+#              TF_STATE_BUCKET  (the S3 bucket you created for state)
+# REQUIRED environment: create an environment named "production" with a
+#   required reviewer (that gate is what makes `apply` manual).
+
+name: terraform
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Which action to run"
+        type: choice
+        options: [plan-and-apply, destroy]
+        default: plan-and-apply
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  STATE_KEY: oidc-demo/terraform.tfstate
+  # Feed non-secret inputs to Terraform as TF_VAR_* (so no committed tfvars).
+  TF_VAR_region: ${{ vars.AWS_REGION }}
+  TF_VAR_github_owner: ${{ vars.GH_OWNER }}
+  TF_VAR_app_repo_name: ${{ vars.APP_REPO_NAME }}
+
+jobs:
+  # ----------------------------------------------------------------------
+  # PLAN: safe, read-only-ish. Runs on every push/PR. Produces a saved plan.
+  # ----------------------------------------------------------------------
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.action != 'destroy' }}
+    defaults:
+      run:
+        working-directory: aws-infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "latest" # >= 1.10 for native S3 state locking
+
+      - name: Configure AWS credentials (access keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ env.STATE_KEY }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -no-color -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: aws-infra/tfplan
+          retention-days: 1
+
+  # ----------------------------------------------------------------------
+  # APPLY: gated by the "production" environment (manual reviewer approval).
+  # Consumes the exact plan produced above.
+  # ----------------------------------------------------------------------
+  apply:
+    name: Terraform Apply (manual approval)
+    needs: plan
+    runs-on: ubuntu-latest
+    # Only apply on a real push to main (not PRs), and not for destroy runs.
+    if: ${{ github.event_name == 'push' || github.event.inputs.action == 'plan-and-apply' }}
+    environment: production # <-- required reviewer gate lives here
+    defaults:
+      run:
+        working-directory: aws-infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "latest"
+
+      - name: Configure AWS credentials (access keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ env.STATE_KEY }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: aws-infra
+
+      - name: Terraform Apply
+        run: terraform apply -no-color tfplan
+
+      - name: Show outputs
+        run: terraform output -no-color
+
+  # ----------------------------------------------------------------------
+  # DESTROY: only via manual workflow_dispatch with action=destroy.
+  # Also gated by the production environment so it can't be accidental.
+  # ----------------------------------------------------------------------
+  destroy:
+    name: Terraform Destroy (manual)
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy' }}
+    environment: production
+    defaults:
+      run:
+        working-directory: aws-infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "latest"
+
+      - name: Configure AWS credentials (access keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ env.STATE_KEY }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Terraform Destroy
+        run: terraform destroy -no-color -auto-approve
