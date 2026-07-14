@@ -55,9 +55,6 @@ jobs:
     name: Terraform Plan
     runs-on: ubuntu-latest
     if: ${{ github.event.inputs.action != 'destroy' }}
-    defaults:
-      run:
-        working-directory: aws-infra
     steps:
       - uses: actions/checkout@v4
 
@@ -92,7 +89,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tfplan
-          path: aws-infra/tfplan
+          path: tfplan
           retention-days: 1
 
   # ----------------------------------------------------------------------
@@ -106,9 +103,6 @@ jobs:
     # Only apply on a real push to main (not PRs), and not for destroy runs.
     if: ${{ github.event_name == 'push' || github.event.inputs.action == 'plan-and-apply' }}
     environment: production # <-- required reviewer gate lives here
-    defaults:
-      run:
-        working-directory: aws-infra
     steps:
       - uses: actions/checkout@v4
 
@@ -134,7 +128,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tfplan
-          path: aws-infra
+          path: .
 
       - name: Terraform Apply
         run: terraform apply -no-color tfplan
@@ -151,9 +145,6 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy' }}
     environment: production
-    defaults:
-      run:
-        working-directory: aws-infra
     steps:
       - uses: actions/checkout@v4
 
