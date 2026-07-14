@@ -1,6 +1,7 @@
 # Terraform
 .terraform/
-.terraform.lock.hcl
+# NOTE: .terraform.lock.hcl is intentionally COMMITTED (not ignored) so the
+# pipeline's plan and apply jobs use identical, reproducible provider versions.
 *.tfstate
 *.tfstate.*
 crash.log

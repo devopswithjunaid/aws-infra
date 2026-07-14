@@ -4,9 +4,12 @@
 # environments: staging pushes the image, production pulls the SAME image.
 
 resource "aws_ecr_repository" "this" {
-  name                 = var.repository_name
-  image_tag_mutability = "IMMUTABLE" # a pushed tag (git SHA) can never be overwritten
-  force_delete         = true        # allow `terraform destroy` to remove non-empty repo (demo only)
+  name = var.repository_name
+  # MUTABLE so re-running a deploy on the same commit doesn't fail with
+  # "tag already exists". Note: "build once, promote the same image" is enforced
+  # by IAM (production role has no ecr push permission), not by tag immutability.
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true # allow `terraform destroy` to remove non-empty repo (demo only)
 
   image_scanning_configuration {
     scan_on_push = true

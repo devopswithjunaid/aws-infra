@@ -60,7 +60,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "latest" # >= 1.10 for native S3 state locking
+          terraform_version: "1.10.5" # pinned so plan & apply use the same version
 
       - name: Configure AWS credentials (access keys)
         uses: aws-actions/configure-aws-credentials@v4
@@ -108,7 +108,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "latest"
+          terraform_version: "1.10.5"
 
       - name: Configure AWS credentials (access keys)
         uses: aws-actions/configure-aws-credentials@v4
@@ -150,7 +150,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "latest"
+          terraform_version: "1.10.5"
 
       - name: Configure AWS credentials (access keys)
         uses: aws-actions/configure-aws-credentials@v4
