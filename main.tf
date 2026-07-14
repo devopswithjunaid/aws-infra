@@ -1,19 +1,29 @@
 # main.tf (root module)
 # =====================
-# This is the "wiring diagram". It creates the few shared/singleton resources
-# (ECS cluster) and calls the reusable child modules under ./modules. The two
-# environments are produced by instantiating the SAME modules twice with
-# different inputs -- staging vs production differ only by those inputs.
+# The "wiring diagram". Creates the shared singletons (VPC via the network
+# module, ECS cluster) and instantiates the reusable child modules under
+# ./modules. Staging and production are produced by calling the SAME modules
+# twice with different inputs.
+#
+# Architecture:
+#   network  -> VPC, public + private subnets, IGW, NAT, route tables
+#   alb (x2) -> one internet-facing ALB per environment (in public subnets)
+#   ecs      -> Fargate service per environment (in PRIVATE subnets, behind ALB)
+#   deploy   -> one OIDC-assumable deploy role per environment
 
 data "aws_caller_identity" "current" {}
 
 locals {
-  # Common tags applied everywhere (provider default_tags also adds some).
-  tags = {
-    Project = var.project_name
-  }
-
+  tags       = { Project = var.project_name }
   account_id = data.aws_caller_identity.current.account_id
+}
+
+# ---- Shared networking ----
+module "network" {
+  source      = "./modules/network"
+  name_prefix = var.project_name
+  vpc_cidr    = var.vpc_cidr
+  tags        = local.tags
 }
 
 # ---- Shared singletons ----
@@ -40,27 +50,36 @@ module "ecr" {
   tags            = local.tags
 }
 
-module "network" {
-  source              = "./modules/network"
-  name_prefix         = var.project_name
+# =========================================================================
+# STAGING environment
+# =========================================================================
+module "staging_alb" {
+  source              = "./modules/alb"
+  name                = "${var.project_name}-staging"
+  vpc_id              = module.network.vpc_id
+  public_subnet_ids   = module.network.public_subnet_ids
   app_port            = var.app_port
   allowed_cidr_blocks = var.allowed_cidr_blocks
   tags                = local.tags
 }
 
-# ---- STAGING environment ----
 module "staging_service" {
-  source            = "./modules/ecs-service"
-  name              = "${var.project_name}-app-staging"
-  app_env           = "staging"
-  cluster_id        = aws_ecs_cluster.main.id
-  region            = var.region
-  app_port          = var.app_port
-  desired_count     = var.desired_count
-  subnet_ids        = module.network.subnet_ids
-  security_group_id = module.network.security_group_id
-  bootstrap_image   = var.bootstrap_image
-  tags              = local.tags
+  source                = "./modules/ecs-service"
+  name                  = "${var.project_name}-app-staging"
+  app_env               = "staging"
+  cluster_id            = aws_ecs_cluster.main.id
+  region                = var.region
+  app_port              = var.app_port
+  desired_count         = var.desired_count
+  vpc_id                = module.network.vpc_id
+  private_subnet_ids    = module.network.private_subnet_ids
+  alb_security_group_id = module.staging_alb.security_group_id
+  target_group_arn      = module.staging_alb.target_group_arn
+  bootstrap_image       = var.bootstrap_image
+  tags                  = local.tags
+
+  # Ensure the ALB + listener exist before the service registers targets.
+  depends_on = [module.staging_alb]
 }
 
 module "staging_deploy_role" {
@@ -81,19 +100,35 @@ module "staging_deploy_role" {
   tags                    = local.tags
 }
 
-# ---- PRODUCTION environment ----
+# =========================================================================
+# PRODUCTION environment
+# =========================================================================
+module "production_alb" {
+  source              = "./modules/alb"
+  name                = "${var.project_name}-production"
+  vpc_id              = module.network.vpc_id
+  public_subnet_ids   = module.network.public_subnet_ids
+  app_port            = var.app_port
+  allowed_cidr_blocks = var.allowed_cidr_blocks
+  tags                = local.tags
+}
+
 module "production_service" {
-  source            = "./modules/ecs-service"
-  name              = "${var.project_name}-app-production"
-  app_env           = "production"
-  cluster_id        = aws_ecs_cluster.main.id
-  region            = var.region
-  app_port          = var.app_port
-  desired_count     = var.desired_count
-  subnet_ids        = module.network.subnet_ids
-  security_group_id = module.network.security_group_id
-  bootstrap_image   = var.bootstrap_image
-  tags              = local.tags
+  source                = "./modules/ecs-service"
+  name                  = "${var.project_name}-app-production"
+  app_env               = "production"
+  cluster_id            = aws_ecs_cluster.main.id
+  region                = var.region
+  app_port              = var.app_port
+  desired_count         = var.desired_count
+  vpc_id                = module.network.vpc_id
+  private_subnet_ids    = module.network.private_subnet_ids
+  alb_security_group_id = module.production_alb.security_group_id
+  target_group_arn      = module.production_alb.target_group_arn
+  bootstrap_image       = var.bootstrap_image
+  tags                  = local.tags
+
+  depends_on = [module.production_alb]
 }
 
 module "production_deploy_role" {

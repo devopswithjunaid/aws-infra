@@ -53,3 +53,18 @@ output "oidc_provider_arn" {
   value       = module.github_oidc.provider_arn
   description = "ARN of the GitHub OIDC identity provider."
 }
+
+output "vpc_id" {
+  value       = module.network.vpc_id
+  description = "ID of the project VPC."
+}
+
+output "staging_alb_dns_name" {
+  value       = module.staging_alb.dns_name
+  description = "Public DNS name of the staging ALB (curl http://<dns>/)."
+}
+
+output "production_alb_dns_name" {
+  value       = module.production_alb.dns_name
+  description = "Public DNS name of the production ALB (curl http://<dns>/)."
+}

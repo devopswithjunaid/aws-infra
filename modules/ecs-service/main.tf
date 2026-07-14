@@ -1,11 +1,13 @@
 # modules/ecs-service
 # ===================
-# Everything needed to RUN one environment's container on Fargate:
+# Everything needed to RUN one environment's container on Fargate, now inside
+# PRIVATE subnets and behind an Application Load Balancer:
 #   - a task execution role (AWS pulls the image + writes logs with this)
 #   - a task role (the app's own runtime identity; empty by default)
 #   - a CloudWatch log group
+#   - a task security group (only the ALB may reach the app port)
 #   - a task definition (bootstrap image; the pipeline replaces it later)
-#   - the ECS service (keeps desired_count tasks running)
+#   - the ECS service (registered into the ALB target group)
 #
 # Instantiated twice by the root module: once for staging, once for production.
 
@@ -36,6 +38,31 @@ resource "aws_iam_role" "task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
   tags               = var.tags
   # No policies: the demo app calls no AWS services (least privilege).
+}
+
+# ---- Task security group: only the ALB may reach the app port ----
+resource "aws_security_group" "task" {
+  name        = "${var.name}-task-sg"
+  description = "Allow inbound on app port ONLY from the ALB; all outbound"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description     = "App port from the ALB only"
+    from_port       = var.app_port
+    to_port         = var.app_port
+    protocol        = "tcp"
+    security_groups = [var.alb_security_group_id]
+  }
+
+  egress {
+    description = "All outbound (ECR pull via NAT, CloudWatch logs)"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(var.tags, { Name = "${var.name}-task-sg" })
 }
 
 # ---- Logs ----
@@ -80,7 +107,7 @@ resource "aws_ecs_task_definition" "this" {
   tags = var.tags
 }
 
-# ---- Service ----
+# ---- Service (private subnets, registered into the ALB target group) ----
 resource "aws_ecs_service" "this" {
   name            = var.name
   cluster         = var.cluster_id
@@ -89,10 +116,19 @@ resource "aws_ecs_service" "this" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = var.subnet_ids
-    security_groups  = [var.security_group_id]
-    assign_public_ip = true # public IP so we can curl it without an ALB
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.task.id]
+    assign_public_ip = false # tasks are private; reached only via the ALB
   }
+
+  load_balancer {
+    target_group_arn = var.target_group_arn
+    container_name   = "app"
+    container_port   = var.app_port
+  }
+
+  # Give a new task time to start before the ALB health check can kill it.
+  health_check_grace_period_seconds = 120
 
   lifecycle {
     # The deploy pipeline owns the running image + scale; Terraform must not revert.

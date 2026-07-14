@@ -12,10 +12,35 @@ laptop). It creates:
   **cannot push** images),
 - an **ECR** repository, an **ECS Fargate** cluster with **two services**
   (staging, production), each with its own task roles and logs,
-- a security group on the **default VPC** (no ALB, no NAT — near-zero idle cost).
+- a purpose-built **VPC** (public + private subnets across 2 AZs, Internet
+  Gateway, NAT Gateway) and one **Application Load Balancer per environment**.
+  Fargate tasks run in the **private** subnets and are reachable only through
+  the ALB.
 
 > The companion **`sample-app`** repo holds the application and the keyless
 > deploy pipeline that assumes these roles.
+
+## Network architecture
+
+```
+                        Internet
+                           │
+              ┌────────────┴────────────┐
+              ▼                          ▼
+   ALB: oidc-demo-staging      ALB: oidc-demo-production   (public subnets, 2 AZs)
+              │  :80 → :8080             │  :80 → :8080
+              ▼                          ▼
+   ECS task (private subnet)   ECS task (private subnet)   (no public IP)
+              │                          │
+              └──────────► NAT Gateway ──┴──► Internet     (egress: ECR pull, logs)
+```
+
+- **Public subnets** host the ALBs and the NAT Gateway; they route to the
+  Internet Gateway.
+- **Private subnets** host the Fargate tasks (no public IP). Inbound comes only
+  from the ALB; outbound (image pull, CloudWatch logs) goes via the NAT Gateway.
+- Each ALB listens on port 80 and forwards to the container's port 8080, health
+  checking `/health`.
 
 ## Folder structure
 
@@ -30,16 +55,17 @@ aws-infra/
 ├── modules/
 │   ├── github-oidc/     # the IAM OIDC provider
 │   ├── ecr/             # image registry
-│   ├── network/         # default-VPC lookups + security group
-│   ├── ecs-service/     # task def + service + task roles + logs (used x2)
+│   ├── network/         # VPC, public/private subnets, IGW, NAT, route tables
+│   ├── alb/             # ALB + target group + listener + SG (used x2)
+│   ├── ecs-service/     # task def + service + task roles + task SG + logs (used x2)
 │   └── deploy-role/     # OIDC deploy role: trust + permissions (used x2)
 └── .github/workflows/terraform.yml   # init/validate/plan (auto) + apply (manual)
 ```
 
-The reusable modules (`ecs-service`, `deploy-role`) are instantiated **twice** —
-once for staging, once for production. Staging vs production differ **only** by
-module inputs (`github_environment`, `can_push_ecr`, names). That difference is
-the entire security lesson.
+The reusable modules (`alb`, `ecs-service`, `deploy-role`) are instantiated
+**twice** — once for staging, once for production. Staging vs production differ
+**only** by module inputs (`github_environment`, `can_push_ecr`, names). That
+difference is the entire security lesson.
 
 ## The bootstrap chicken-and-egg (read this first)
 
@@ -128,18 +154,42 @@ reviewer**. This is what makes `terraform apply` pause for manual approval.
 | `staging_deploy_role_arn` | `STAGING_ROLE_ARN` |
 | `production_deploy_role_arn` | `PRODUCTION_ROLE_ARN` |
 
-> After apply but before the first app deploy, both ECS services run a harmless
-> **placeholder image** (nginx) and are **not** reachable on the app port yet.
-> That's expected — the first `sample-app` deploy replaces it with your image.
+You can also copy the two ALB DNS names from the outputs — `curl http://<dns>/`
+reaches each environment once the app is deployed.
+
+> **Expected on first apply:** before the first `sample-app` deploy, both
+> services run a **placeholder image** (nginx on port 80) that intentionally does
+> **not** pass the target group health check (which probes port 8080 `/health`).
+> ECS will show the tasks as unhealthy/cycling and the ALB returns `503`. This is
+> normal — the infrastructure is correct and simply waiting for its first real
+> application deployment, which listens on 8080 and passes `/health`.
 
 ## Tearing it down (avoid ongoing charges)
 
 Actions tab → **terraform** workflow → **Run workflow** → choose **destroy** →
-approve. Fargate tasks cost money while running, so destroy (or scale services to
-0) when you're not demoing.
+approve. The NAT Gateway and ALBs bill hourly, so destroy when you're not
+demoing.
 
 ## Cost note
 
-Default-VPC + public-IP Fargate with **no ALB and no NAT** keeps idle cost
-essentially to the two running Fargate tasks (smallest size) + a few cents of
-ECR/logs. Destroy when done.
+This is a production-style layout, so it is **not** free while running:
+- **NAT Gateway** ~\$0.045/hr (~\$32/mo) + data processing
+- **2 × Application Load Balancer** ~\$0.0225/hr each (~\$16/mo each)
+- 2 × Fargate tasks (smallest size) + a few cents of ECR/logs
+
+Expect a few dollars per day while up. **Destroy when you're done demoing.** A
+single NAT Gateway (not one per AZ) is used deliberately to keep cost down — a
+documented trade-off vs. full multi-AZ HA.
+
+## Known simplifications (deliberate, not oversights)
+
+These are conscious demo trade-offs; each has a clear production upgrade path:
+
+| Simplification | Production upgrade |
+|---|---|
+| ALB listens on **HTTP :80** only | Add an ACM certificate + HTTPS :443 listener, redirect 80→443 |
+| **Single** NAT Gateway | One NAT per AZ for high availability |
+| Bootstrap uses an **AdministratorAccess** IAM user | A least-privilege Terraform role, or OIDC bootstrap |
+| One Terraform **state for both environments** | Split state per environment (separate backends/workspaces) |
+| Container Insights **disabled** | Enable for metrics/observability |
+| ECR pulls egress via **NAT** | VPC endpoints (ecr.api, ecr.dkr, s3, logs) to drop NAT cost |

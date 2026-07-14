@@ -29,13 +29,23 @@ variable "desired_count" {
   default     = 1
 }
 
-variable "subnet_ids" {
-  description = "Subnets to place tasks in."
+variable "vpc_id" {
+  description = "VPC id (for the task security group)."
+  type        = string
+}
+
+variable "private_subnet_ids" {
+  description = "Private subnets to place tasks in."
   type        = list(string)
 }
 
-variable "security_group_id" {
-  description = "Security group for the tasks."
+variable "alb_security_group_id" {
+  description = "ALB security group id; the task SG only allows inbound from this."
+  type        = string
+}
+
+variable "target_group_arn" {
+  description = "ALB target group ARN the service registers into."
   type        = string
 }
 

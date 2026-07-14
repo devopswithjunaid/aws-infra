@@ -32,6 +32,12 @@ variable "app_port" {
   default     = 8080
 }
 
+variable "vpc_cidr" {
+  description = "CIDR block for the project VPC."
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
 variable "allowed_cidr_blocks" {
   description = "Who can reach the running container over the internet. Default 0.0.0.0/0 (anyone) is fine for a short-lived demo so you can curl it; for real use, lock this to your own IP like 1.2.3.4/32."
   type        = list(string)

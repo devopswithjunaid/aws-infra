@@ -1,16 +1,12 @@
 variable "name_prefix" {
-  description = "Prefix for naming the security group."
+  description = "Prefix for naming VPC resources."
   type        = string
 }
 
-variable "app_port" {
-  description = "TCP port the container listens on."
-  type        = number
-}
-
-variable "allowed_cidr_blocks" {
-  description = "CIDR ranges allowed to reach the app port."
-  type        = list(string)
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC."
+  type        = string
+  default     = "10.0.0.0/16"
 }
 
 variable "tags" {

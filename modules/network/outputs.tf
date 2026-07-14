@@ -1,14 +1,14 @@
 output "vpc_id" {
-  description = "Default VPC id."
-  value       = data.aws_vpc.default.id
+  description = "The VPC id."
+  value       = aws_vpc.this.id
 }
 
-output "subnet_ids" {
-  description = "Default subnet ids (tasks are spread across these)."
-  value       = data.aws_subnets.default.ids
+output "public_subnet_ids" {
+  description = "Public subnet ids (ALB + NAT live here)."
+  value       = aws_subnet.public[*].id
 }
 
-output "security_group_id" {
-  description = "Security group id for the app tasks."
-  value       = aws_security_group.app.id
+output "private_subnet_ids" {
+  description = "Private subnet ids (Fargate tasks live here)."
+  value       = aws_subnet.private[*].id
 }
